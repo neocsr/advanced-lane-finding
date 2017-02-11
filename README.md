@@ -1,33 +1,178 @@
-## Advanced Lane Finding
-[![Udacity - Self-Driving Car NanoDegree](https://s3.amazonaws.com/udacity-sdc/github/shield-carnd.svg)](http://www.udacity.com/drive)
+
+# Advanced Line Finding
+
+# Camera Calibration
+
+First I load the calibration images and confirm that the chessboard pattern has valid 9x6 corners.
+
+Then I proceed to extract the `object points` and `image points` that I need to calculate the `camera matrix` and `distortion coefficients`:
+
+![png](docs/output_9_0.png)
+
+Here is an example of the chessboard corners identified in one of the calibration images:
+
+![png](docs/output_10_0.png)
+
+I also notice that on 3 images OpenCV didn't extract the corners. Those images had missing some of the corners and were not detected by OpenCV.
 
 
-In this project, your goal is to write a software pipeline to identify the lane boundaries in a video, but the main output or product we want you to create is a detailed writeup of the project.  Check out the [writeup template](https://github.com/udacity/CarND-Advanced-Lane-Lines/blob/master/writeup_template.md) for this project and use it as a starting point for creating your own writeup.  
+# Distortion Correction
 
-Creating a great writeup:
----
-A great writeup should include the rubric points as well as your description of how you addressed each point.  You should include a detailed description of the code used in each step (with line-number references and code snippets where necessary), and links to other supporting documents or external references.  You should include images in your writeup to demonstrate how your code works with examples.  
+Using the `object points` and `image points` I calculate the camera matrix `mtx` and distortion coefficients `dist`:
 
-All that said, please be concise!  We're not looking for you to write a book here, just a brief description of how you passed each rubric point, and references to the relevant code :). 
+```python
+w = image_shape[1]
+h = image_shape[0]
 
-You're not required to use markdown for your writeup.  If you use another method please just submit a pdf of your writeup.
+image_size = (w, h)
 
-The Project
----
+ret, mtx, dist, rvecs, tvecs = cv2.calibrateCamera(objectPoints=object_points,
+                                                   imagePoints=image_points,
+                                                   imageSize=image_size,
+                                                   cameraMatrix=None,
+                                                   distCoeffs=None)
+```
 
-The goals / steps of this project are the following:
+I use those values to undistort our images. Here it is side by side the original and undistorted calibration image:
 
-* Compute the camera calibration matrix and distortion coefficients given a set of chessboard images.
-* Apply a distortion correction to raw images.
-* Use color transforms, gradients, etc., to create a thresholded binary image.
-* Apply a perspective transform to rectify binary image ("birds-eye view").
-* Detect lane pixels and fit to find the lane boundary.
-* Determine the curvature of the lane and vehicle position with respect to center.
-* Warp the detected lane boundaries back onto the original image.
-* Output visual display of the lane boundaries and numerical estimation of lane curvature and vehicle position.
 
-The images for camera calibration are stored in the folder called `camera_cal`.  The images in `test_images` are for testing your pipeline on single frames.  To help the reviewer examine your work, please save examples of the output from each stage of your pipeline in the folder called `ouput_images`, and include a description in your writeup for the project of what each image shows.    The video called `project_video.mp4` is the video your pipeline should work well on.  
+![png](docs/output_15_0.png)
 
-The `challenge_video.mp4` video is an extra (and optional) challenge for you if you want to test your pipeline under somewhat trickier conditions.  The `harder_challenge.mp4` video is another optional challenge and is brutal!
 
-If you're feeling ambitious (again, totally optional though), don't stop there!  We encourage you to go out and take video of your own, calibrate your camera and show us how you would implement this project from scratch!
+Using our sample images:
+
+
+![png](docs/output_18_0.png)
+
+
+An original image and the same one undistorted:
+
+
+![png](docs/output_21_0.png)
+
+
+# Threshold Binary Image
+
+I proceed to define several transformations that will help me to generate a thresholded binary image.
+
+A summary of the methods used for testing:
+
+```python
+def grayscale(image):
+def mask(image):
+def abs_sobel_thresh(gray, orient='x', thresh_min=0, thresh_max=255):
+def mag_thresh(gray, sobel_kernel=3, thresh=(0, 255)):
+def dir_thresh(gray, sobel_kernel=3, thresh=(0, np.pi/2)):
+def hls_select(image, thresh=(0, 255)):
+def hsv_white(image):
+def hsv_yellow(image):
+```
+
+The code is in lines #107-#215 in `advanced_line_finding.py`
+
+An example of each of those methods:
+
+![png](docs/output_32_0.png)
+
+After a process of trial and error I found that the following pipeline works well for the original video:
+
+```python
+def pipeline(image):
+    gray = grayscale(image)
+    masked = mask(gray)
+    magnitude = mag_thresh(gray, sobel_kernel=9, thresh=(100, 255))
+    direction = dir_thresh(gray, sobel_kernel=15, thresh=(0.19, 1.37))
+    yellow = hsv_yellow(image)
+    white = hsv_white(image)
+
+    binary_output = ((masked > 0) &
+                     (((magnitude == 1) & (direction == 1)) | yellow | white))
+
+    return binary_output
+```
+
+# Calculate Mapping Points
+
+Using a sample image with almost parallel lines, I manually extracted the coordinates and for both source `src` and destination `dst`:
+
+```python
+src = np.float32(
+    [[748, 490],
+     [1073, 700],
+     [235, 700],
+     [540, 494]])
+
+dst = np.float32(
+    [[1080, 490],
+     [1073, 700],
+     [235, 700],
+     [270, 490]])
+```
+
+Using those mapping points to warp the perspective in our samples:
+
+![png](docs/output_37_0.png)
+
+The binary output looks like this:
+
+![png](docs/output_41_0.png)
+
+
+# Detect Lane Lines
+
+To detect the lines I follow the procedure from the lectures using a histogram and stacked windows to identify the position of the pixels that could belong to a lane line.
+
+After those points have been identified and separated in 2 groups, left line and right line, I proceeded to fit a polynomial of degree 2.
+
+The code is in lines #292-#391 in `advanced_line_finding.py`.
+
+
+A complete example look like this:
+
+![png](docs/output_47_1.png)
+
+
+# Measuring Curvature
+
+To measure the curvature I used the equation and values to convert from pixels to meters from the lecture to calculate the curvature:
+
+```python
+    # Define conversions in x and y from pixels space to meters
+    ym_per_pix = 30/720   # meters per pixel in y dimension
+    xm_per_pix = 3.7/700  # meters per pixel in x dimension
+```
+
+To calculate the position of the vehicle, I did simple calculation assuming that the camera is right in the center of the vehicle.
+
+From the 2 polynomials, I extracted the points of the bottom of the image and use those to get the center of the lane. The difference between the center of the lane and the center of the image (camera position) is the offset of the vehicle with respect to the center. The code is in lines #503-#518.
+
+The final processing looks like this:
+
+![png](docs/output_60_0.png)
+
+The vertical red line indicates the center of the image, and the blue mark indicates the center of the lane.
+
+The overlay in the top right show the perpective tranformation including the binary output.
+
+
+# Pipeline
+
+Here is a link to the final video [project_video_output.mp4](project_video_output.mp4).
+
+The video processing time was under 3 minutes:
+
+```
+    CPU times: user 3min 10s, sys: 4.38 s, total: 3min 14s
+    Wall time: 2min 31s
+```
+
+# Discussion
+
+I think the most time consuming part of the process was trying to find the best parameters for the pipeline that filter the image good enough to leave most of the lane lines visible.
+
+The lighting changes; shadows and very bright sections of the road presented a real challenge. The pipeline will work most of the time, but fail when crossing a darker or brighter area. HSV and HLS really helped to deal with these conditions.
+
+The smoothing using values from previous frames is required. Without that the lane lines overlay jitters too much.
+
+My current pipeline really depends on the lighting conditions. It will not work well at night.
+I can think of a more robust approach if we can modify dynamically the parameters of the pipeline according to the lightning conditions.
